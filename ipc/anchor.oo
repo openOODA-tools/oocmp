@@ -1,0 +1,73 @@
+// # oocmp IPC Anchor
+//
+// Logline: Verification anchor testing JSON extraction, options parsing, and MCP protocol rendering.
+//
+// Setup: Demands FsReadCap to verify MCP serialization and option parsing behaviors.
+//
+// Beats:
+//   1. Verify JSON escaping and extraction.
+//   2. Verify CLI argument parsing for options and skip values.
+//   3. Verify MCP initialization and tools/list rendering.
+//   4. Verify MCP call dispatch on synthetic buffers.
+
+import "ipc/json_field.oo";
+import "ipc/cmp_opts.oo";
+import "ipc/mcp_serve.oo";
+
+pub fn verify_ipc_subsystem(fs: &FsReadCap) -> Bool {
+    // 1. JSON field testing
+    let json_sample: String = "{\"name\":\"test\",\"val\":\"42\",\"count\":10}";
+    let name_extracted: String = extract_json_str(json_sample, "name");
+    if name_extracted != "test" {
+        return false;
+    }
+    let val_extracted: Int = extract_json_int(json_sample, "val", 0);
+    if val_extracted != 42 {
+        return false;
+    }
+
+    // 2. Options parsing testing
+    let mut args: List[String] = list_new();
+    args = list_push(args, "-l");
+    args = list_push(args, "-b");
+    args = list_push(args, "fileA.bin");
+    args = list_push(args, "fileB.bin");
+    args = list_push(args, "100");
+    args = list_push(args, "200");
+
+    let opts: CmpCliOpts = parse_cli_args(args);
+    if opts.file1 != "fileA.bin" || opts.file2 != "fileB.bin" {
+        return false;
+    }
+    if !opts.verbose_all || !opts.print_bytes {
+        return false;
+    }
+    if opts.skip1 != 100 || opts.skip2 != 200 {
+        return false;
+    }
+
+    // 3. MCP init and tools/list verification
+    let init_resp: String = render_mcp_init("1");
+    if !str_contains(init_resp, "\"serverInfo\":{\"name\":\"oocmp\"") {
+        return false;
+    }
+    let tools_resp: String = render_mcp_tools_list("2");
+    if !str_contains(tools_resp, "cmp_compare") || !str_contains(tools_resp, "cmp_are_identical") {
+        return false;
+    }
+
+    // 4. MCP call dispatch testing
+    let call_req: String = "{\"content1\":\"hello world\",\"content2\":\"hello world\"}";
+    let res: String = handle_mcp_call(fs, "3", "cmp_are_identical", call_req);
+    if !str_contains(res, "\"identical\":true") {
+        return false;
+    }
+
+    let diff_req: String = "{\"content1\":\"abc\",\"content2\":\"axc\"}";
+    let diff_res: String = handle_mcp_call(fs, "4", "cmp_are_identical", diff_req);
+    if !str_contains(diff_res, "\"identical\":false") {
+        return false;
+    }
+
+    return true;
+}

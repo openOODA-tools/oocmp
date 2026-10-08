@@ -1,0 +1,42 @@
+// # oocmp Core Verification Anchor
+//
+// Logline: Verification anchor certifying stream comparison, octal translation, and diff collections.
+//
+// Setup: Validates byte comparison engine against deterministic fixtures.
+//
+// Beats:
+//   1. Assert identical buffer equality.
+//   2. Assert differing buffer detection at exact offset and line.
+//   3. Assert octal byte representation formatting.
+//   4. Validate EOF disparity handling.
+
+import "core/cmp_types.oo";
+import "core/cmp_engine.oo";
+import "core/cmp_demo.oo";
+
+pub fn verify_core_subsystem() -> Bool {
+    let id_res: CmpResult = build_demo_identical();
+    if !id_res.identical || id_res.status != "IDENTICAL" {
+        return false;
+    }
+
+    let diff_res: CmpResult = build_demo_differ();
+    if diff_res.identical || diff_res.status != "DIFFER" {
+        return false;
+    }
+    if diff_res.first_diff_offset != 7 || diff_res.first_diff_line != 1 {
+        return false;
+    }
+
+    let oct: String = int_to_octal3(65);
+    if oct != "101" {
+        return false;
+    }
+
+    let eof_res: CmpResult = build_demo_eof();
+    if eof_res.identical || eof_res.status != "EOF" {
+        return false;
+    }
+
+    return true;
+}

@@ -4,7 +4,7 @@
 # "Removes oocmp binary, package installations, and cache."
 #
 # Usage:
-#   curl -fsSL https://openooda-toocmp.github.io/oocmp/uninstall.sh | bash
+#   curl -fsSL https://openooda-tools.github.io/oocmp/uninstall.sh | bash
 #   or: ./uninstall.sh [options]
 #
 # Options:

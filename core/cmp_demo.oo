@@ -1,0 +1,41 @@
+// # oocmp Demonstration and Test Fixtures
+//
+// Logline: Generates simulated byte streams and comparative differential fixtures.
+//
+// Setup: Supplies deterministic test fixtures for verification and headless test harnesses.
+//
+// Beats:
+//   1. Construct identical buffer comparison fixture.
+//   2. Construct single-byte divergence comparison fixture.
+//   3. Construct multi-byte difference list fixture.
+//   4. Construct EOF disparity comparison fixture.
+
+import "core/cmp_types.oo";
+import "core/cmp_engine.oo";
+
+pub fn build_demo_identical() -> CmpResult {
+    let s: String = "openOODA sovereign substrate\n";
+    let spec: CmpSpec = make_default_spec();
+    return compare_buffers("stream_a", s, "stream_b", s, spec);
+}
+
+pub fn build_demo_differ() -> CmpResult {
+    let s1: String = "alpha 100\n";
+    let s2: String = "alpha 200\n";
+    let spec: CmpSpec = make_default_spec();
+    return compare_buffers("fixture_a", s1, "fixture_b", s2, spec);
+}
+
+pub fn build_demo_diffs() -> List[ByteDiff] {
+    let s1: String = "alpha 100\n";
+    let s2: String = "alpha 200\n";
+    let spec: CmpSpec = make_default_spec();
+    return collect_diffs(s1, s2, spec, 10);
+}
+
+pub fn build_demo_eof() -> CmpResult {
+    let s1: String = "data\n";
+    let s2: String = "data\nextra bytes\n";
+    let spec: CmpSpec = make_default_spec();
+    return compare_buffers("primary", s1, "extended", s2, spec);
+}

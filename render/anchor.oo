@@ -1,0 +1,42 @@
+// # oocmp Render Subsystem Verification Anchor
+//
+// Logline: Verification anchor certifying formatting of POSIX cmp outputs and JSON telemetry.
+//
+// Setup: Validates output generators against precomputed comparison fixtures.
+//
+// Beats:
+//   1. Assert POSIX diff string formatting.
+//   2. Assert verbose listing formatting.
+//   3. Assert EOF diagnostic message generation.
+//   4. Validate structured JSON telemetry schema.
+
+import "core/cmp_types.oo";
+import "core/cmp_demo.oo";
+import "render/cmp_theme.oo";
+
+pub fn verify_render_subsystem() -> Bool {
+    let diff_res: CmpResult = build_demo_differ();
+    let posix_out: String = render_cmp_posix(diff_res, false);
+    if !str_contains(posix_out, "differ: byte 7, line 1") {
+        return false;
+    }
+
+    let diffs: List[ByteDiff] = build_demo_diffs();
+    let verbose_out: String = render_cmp_verbose(diffs, false);
+    if chars_len(verbose_out) == 0 {
+        return false;
+    }
+
+    let eof_res: CmpResult = build_demo_eof();
+    let eof_out: String = render_cmp_posix(eof_res, false);
+    if !str_contains(eof_out, "EOF on") {
+        return false;
+    }
+
+    let json_out: String = render_cmp_json(diff_res);
+    if !str_contains(json_out, "\"tool\":\"oocmp\"") {
+        return false;
+    }
+
+    return true;
+}

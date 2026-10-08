@@ -1,13 +1,28 @@
-// # oocmp Root Anchor
+// # oocmp Root Verification Anchor
 //
-// Logline: Top-level anchor re-exporting options, core logic, render, and ipc subsystems.
+// Logline: Top-level verification anchor certifying core comparison engine, rendering, and IPC subsystems.
 //
-// Setup: Pure shim re-exporting all oocmp subsystem anchors.
+// Setup: Demands FsReadCap to invoke full subsystem verification test suites.
 //
 // Beats:
-//   1. Re-export options parsing subsystem.
-//   2. Re-export core oocmp execution engine.
-//   3. Re-export render formatting subsystem.
-//   4. Re-export Model Context Protocol (MCP) IPC subsystem.
+//   1. Verify core comparison engine, types, and fixtures.
+//   2. Verify rendering of POSIX diffs, verbose octal tables, and JSON.
+//   3. Verify IPC parsing, JSON extraction, and MCP server protocol.
+//   4. Export verify_all function for root test runner.
 
-import "main.oo";
+import "core/anchor.oo";
+import "render/anchor.oo";
+import "ipc/anchor.oo";
+
+pub fn verify_all(fs: &FsReadCap) -> Bool {
+    if !verify_core_subsystem() {
+        return false;
+    }
+    if !verify_render_subsystem() {
+        return false;
+    }
+    if !verify_ipc_subsystem(fs) {
+        return false;
+    }
+    return true;
+}

@@ -1,0 +1,196 @@
+// # Model Context Protocol (MCP) Server for oocmp
+//
+// Logline: JSON-RPC 2.0 stdio server providing sovereign byte comparison, octal diffs, and similarity audits.
+//
+// Setup: Demands FsReadCap to service streaming agent tool invocations over standard input.
+//
+// Beats:
+//   1. Handle MCP initialize handshake with server metadata.
+//   2. Expose tools/list catalogue with five sovereign byte comparison tools.
+//   3. Dispatch tools/call for compare, diff list, identity check, similarity, and audit.
+//   4. Deliver streaming JSON-RPC responses over standard output.
+
+import "core/cmp_types.oo";
+import "core/cmp_engine.oo";
+import "render/cmp_theme.oo";
+import "ipc/json_field.oo";
+
+fn build_error(id: String, code: Int, msg: String) -> String {
+    return "{\"jsonrpc\":\"2.0\",\"id\":" + id + ",\"error\":{\"code\":" + to_string(code) + ",\"message\":\"" + json_escape(msg) + "\"}}\n";
+}
+
+fn build_tool_result(id: String, text: String) -> String {
+    return "{\"jsonrpc\":\"2.0\",\"id\":" + id + ",\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"" + json_escape(text) + "\"}]}}\n";
+}
+
+pub fn render_mcp_init(id: String) -> String {
+    return "{\"jsonrpc\":\"2.0\",\"id\":" + id + ",\"result\":{\"protocolVersion\":\"2024-11-05\",\"capabilities\":{\"tools\":{}},\"serverInfo\":{\"name\":\"oocmp\",\"version\":\"0.2.0\"}}}\n";
+}
+
+pub fn render_mcp_tools_list(id: String) -> String {
+    let mut out: String = "{\"jsonrpc\":\"2.0\",\"id\":" + id + ",\"result\":{\"tools\":[";
+    out = out + "{\"name\":\"cmp_compare\",\"description\":\"Compare two files or text buffers byte-by-byte with optional skip, limit, and octal formatting.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"path1\":{\"type\":\"string\"},\"path2\":{\"type\":\"string\"},\"content1\":{\"type\":\"string\"},\"content2\":{\"type\":\"string\"},\"skip1\":{\"type\":\"integer\"},\"skip2\":{\"type\":\"integer\"},\"limit\":{\"type\":\"integer\"},\"print_bytes\":{\"type\":\"boolean\"},\"verbose\":{\"type\":\"boolean\"}},\"required\":[]}},";
+    out = out + "{\"name\":\"cmp_diff_list\",\"description\":\"Collect and format detailed byte-by-byte difference listing with octal values.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"path1\":{\"type\":\"string\"},\"path2\":{\"type\":\"string\"},\"content1\":{\"type\":\"string\"},\"content2\":{\"type\":\"string\"},\"max_diffs\":{\"type\":\"integer\"},\"print_bytes\":{\"type\":\"boolean\"}},\"required\":[]}},";
+    out = out + "{\"name\":\"cmp_are_identical\",\"description\":\"Fast boolean check if two files or string payloads are bit-for-bit identical.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"path1\":{\"type\":\"string\"},\"path2\":{\"type\":\"string\"},\"content1\":{\"type\":\"string\"},\"content2\":{\"type\":\"string\"}},\"required\":[]}},";
+    out = out + "{\"name\":\"cmp_similarity\",\"description\":\"Calculate byte similarity metrics between two files or string buffers.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"path1\":{\"type\":\"string\"},\"path2\":{\"type\":\"string\"},\"content1\":{\"type\":\"string\"},\"content2\":{\"type\":\"string\"}},\"required\":[]}},";
+    out = out + "{\"name\":\"cmp_audit\",\"description\":\"Run comprehensive byte-level audit and return diagnostic and JSON telemetry.\",\"inputSchema\":{\"type\":\"object\",\"properties\":{\"path1\":{\"type\":\"string\"},\"path2\":{\"type\":\"string\"},\"content1\":{\"type\":\"string\"},\"content2\":{\"type\":\"string\"}},\"required\":[]}}";
+    out = out + "]}}\n";
+    return out;
+}
+
+fn resolve_buf(fs: &FsReadCap, path: String, content: String) -> Result[String, String] {
+    if chars_len(content) > 0 {
+        return Ok(content);
+    }
+    if chars_len(path) > 0 {
+        let r: Result[String, String] = read_file(fs, path);
+        if !r.is_ok() {
+            return Err("oocmp: cannot read file '" + path + "'");
+        }
+        return Ok(match r { Ok(s) => s, Err(_) => "" });
+    }
+    return Err("oocmp: neither path nor content provided");
+}
+
+pub fn handle_mcp_call(
+    fs: &FsReadCap,
+    id: String,
+    tool_name: String,
+    req: String
+) -> String {
+    let p1: String = extract_json_str(req, "path1");
+    let p2: String = extract_json_str(req, "path2");
+    let c1: String = extract_json_str(req, "content1");
+    let c2: String = extract_json_str(req, "content2");
+
+    let r1: Result[String, String] = resolve_buf(fs, p1, c1);
+    if !r1.is_ok() {
+        return build_error(id, -32602, match r1 { Ok(_) => "", Err(e) => e });
+    }
+    let r2: Result[String, String] = resolve_buf(fs, p2, c2);
+    if !r2.is_ok() {
+        return build_error(id, -32602, match r2 { Ok(_) => "", Err(e) => e });
+    }
+
+    let b1: String = match r1 { Ok(s) => s, Err(_) => "" };
+    let b2: String = match r2 { Ok(s) => s, Err(_) => "" };
+    let name1: String = if chars_len(p1) > 0 { p1 } else { "buffer1" };
+    let name2: String = if chars_len(p2) > 0 { p2 } else { "buffer2" };
+
+    if tool_name == "cmp_compare" {
+        let mut spec: CmpSpec = make_default_spec();
+        spec.skip1 = extract_json_int(req, "skip1", 0);
+        spec.skip2 = extract_json_int(req, "skip2", 0);
+        spec.limit_bytes = extract_json_int(req, "limit", -1);
+        let pb_s: String = extract_json_str(req, "print_bytes");
+        if pb_s == "true" { spec.print_bytes = true; }
+        let vb_s: String = extract_json_str(req, "verbose");
+        if vb_s == "true" { spec.verbose_all = true; }
+
+        if spec.verbose_all {
+            let diffs: List[ByteDiff] = collect_diffs(b1, b2, spec, 256);
+            let text: String = render_cmp_verbose(diffs, spec.print_bytes);
+            let out: String = if chars_len(text) == 0 { "Files are identical.\n" } else { text };
+            return build_tool_result(id, out);
+        }
+
+        let res: CmpResult = compare_buffers(name1, b1, name2, b2, spec);
+        let text: String = render_cmp_posix(res, spec.print_bytes);
+        let out: String = if chars_len(text) == 0 { "Files are identical.\n" } else { text };
+        return build_tool_result(id, out);
+    }
+
+    if tool_name == "cmp_diff_list" {
+        let max_d: Int = extract_json_int(req, "max_diffs", 64);
+        let mut spec: CmpSpec = make_default_spec();
+        let pb_s: String = extract_json_str(req, "print_bytes");
+        if pb_s == "true" { spec.print_bytes = true; }
+        let diffs: List[ByteDiff] = collect_diffs(b1, b2, spec, max_d);
+        let text: String = render_cmp_verbose(diffs, spec.print_bytes);
+        let out: String = if chars_len(text) == 0 { "No differences found.\n" } else { text };
+        return build_tool_result(id, out);
+    }
+
+    if tool_name == "cmp_are_identical" {
+        let res: CmpResult = compare_buffers(name1, b1, name2, b2, make_default_spec());
+        let id_str: String = if res.identical { "true" } else { "false" };
+        let out: String = "{\"identical\":" + id_str + ",\"status\":\"" + res.status + "\",\"compared_bytes\":" + to_string(res.total_compared) + "}";
+        return build_tool_result(id, out);
+    }
+
+    if tool_name == "cmp_similarity" {
+        let res: CmpResult = compare_buffers(name1, b1, name2, b2, make_default_spec());
+        if res.identical {
+            return build_tool_result(id, "{\"similarity_pct\":\"100.0%\",\"identical\":true,\"compared_bytes\":" + to_string(res.total_compared) + "}");
+        }
+        let matching: Int = res.total_compared - res.diff_count;
+        let pct_int: Int = if res.total_compared > 0 { (matching * 100) / res.total_compared } else { 0 };
+        let out: String = "{\"similarity_pct\":\"" + to_string(pct_int) + "%\",\"identical\":false,\"status\":\"" + res.status + "\",\"compared_bytes\":" + to_string(res.total_compared) + ",\"diff_count\":" + to_string(res.diff_count) + "}";
+        return build_tool_result(id, out);
+    }
+
+    if tool_name == "cmp_audit" {
+        let res: CmpResult = compare_buffers(name1, b1, name2, b2, make_default_spec());
+        let p_out: String = render_cmp_posix(res, true);
+        let j_out: String = render_cmp_json(res);
+        let combined: String = p_out + j_out;
+        return build_tool_result(id, combined);
+    }
+
+    return build_error(id, -32601, "Unknown tool: " + tool_name);
+}
+
+pub fn handle_mcp_message(fs: &FsReadCap, req: String) -> String {
+    let id_str: String = extract_json_str(req, "id");
+    let id: String = if chars_len(id_str) > 0 { "\"" + id_str + "\"" } else { "1" };
+    let method: String = extract_json_str(req, "method");
+
+    if method == "initialize" {
+        return render_mcp_init(id);
+    }
+    if method == "notifications/initialized" {
+        return "";
+    }
+    if method == "tools/list" {
+        return render_mcp_tools_list(id);
+    }
+    if method == "tools/call" {
+        let tool_name: String = extract_json_str(req, "name");
+        return handle_mcp_call(fs, id, tool_name, req);
+    }
+    if method == "shutdown" {
+        return "{\"jsonrpc\":\"2.0\",\"id\":" + id + ",\"result\":null}\n";
+    }
+    return build_error(id, -32601, "Method not found: " + method);
+}
+
+pub fn run_mcp_server(fs: &FsReadCap) {
+    let mut buf: String = "";
+    let mut running: Bool = true;
+    while running {
+        let r: Result[String, String] = oo_read_stdin_chunk(fs, 4096);
+        if !r.is_ok() {
+            running = false;
+        } else {
+            let chunk: String = match r { Ok(s) => s, Err(_) => "" };
+            if chars_len(chunk) == 0 {
+                running = false;
+            } else {
+                buf = buf + chunk;
+                let mut nl_pos: Int = str_index_of(buf, "\n");
+                while nl_pos >= 0 {
+                    let line: String = str_slice(buf, 0, nl_pos);
+                    buf = str_slice(buf, nl_pos + 1, chars_len(buf));
+                    let trimmed: String = str_trim(line);
+                    if chars_len(trimmed) > 0 {
+                        let resp: String = handle_mcp_message(fs, trimmed);
+                        if chars_len(resp) > 0 {
+                            print(resp);
+                        }
+                    }
+                    nl_pos = str_index_of(buf, "\n");
+                }
+            }
+        }
+    }
+}

@@ -1,0 +1,68 @@
+// # oocmp Formatting and Rendering Subsystem
+//
+// Logline: Formats POSIX cmp diagnostic messages, verbose octal listings, and JSON telemetry.
+//
+// Setup: Generates standard diagnostic streams adhering strictly to POSIX cmp utility conventions.
+//
+// Beats:
+//   1. Format standard first-difference report with optional byte representations.
+//   2. Format verbose octal byte divergence listing.
+//   3. Handle EOF report message for mismatched file lengths.
+//   4. Generate structured JSON telemetry.
+
+import "core/cmp_types.oo";
+import "core/cmp_engine.oo";
+
+pub fn render_cmp_posix(res: CmpResult, print_bytes: Bool) -> String {
+    if res.identical {
+        return "";
+    }
+
+    if res.status == "EOF" {
+        return "oocmp: EOF on " + res.eof_file + "\n";
+    }
+
+    let base: String = res.file1 + " " + res.file2 + " differ: byte "
+        + to_string(res.first_diff_offset) + ", line " + to_string(res.first_diff_line);
+
+    if print_bytes {
+        let b1_oct: String = int_to_octal3(res.first_val1);
+        let b2_oct: String = int_to_octal3(res.first_val2);
+        let c1: String = byte_to_char_repr(res.first_val1);
+        let c2: String = byte_to_char_repr(res.first_val2);
+        return base + " is " + b1_oct + " " + c1 + " " + b2_oct + " " + c2 + "\n";
+    }
+
+    return base + "\n";
+}
+
+pub fn render_cmp_verbose(diffs: List[ByteDiff], print_bytes: Bool) -> String {
+    let mut out: String = "";
+    let n: Int = list_len(diffs);
+    let mut i: Int = 0;
+    while i < n {
+        let d: ByteDiff = list_get(diffs, i);
+        let off_s: String = to_string(d.byte_offset);
+        if print_bytes {
+            out = out + off_s + " " + d.oct1 + " " + d.char1 + " " + d.oct2 + " " + d.char2 + "\n";
+        } else {
+            out = out + off_s + " " + d.oct1 + " " + d.oct2 + "\n";
+        }
+        i = i + 1;
+    }
+    return out;
+}
+
+pub fn render_cmp_json(res: CmpResult) -> String {
+    let mut j: String = "{\"tool\":\"oocmp\",\"version\":\"0.2.0\",";
+    j = j + "\"file1\":\"" + res.file1 + "\",";
+    j = j + "\"file2\":\"" + res.file2 + "\",";
+    let id_val: String = if res.identical { "true" } else { "false" };
+    j = j + "\"identical\":" + id_val + ",";
+    j = j + "\"status\":\"" + res.status + "\",";
+    j = j + "\"compared_bytes\":" + to_string(res.total_compared) + ",";
+    j = j + "\"diff_count\":" + to_string(res.diff_count) + ",";
+    j = j + "\"first_diff_offset\":" + to_string(res.first_diff_offset) + ",";
+    j = j + "\"first_diff_line\":" + to_string(res.first_diff_line) + "}\n";
+    return j;
+}

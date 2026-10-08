@@ -1,52 +1,142 @@
 // # oocmp Main Entry Point
 //
-// Logline: Instant byte-by-byte file comparison reporting first byte difference and line count.
+// Logline: Sovereign byte comparator reporting first byte divergence, line count, and octal diffs.
 //
-// Setup: Demands explicit capability tokens and standard argument list.
+// Setup: Demands explicit FsReadCap, ProcessCap, and EnvCap tokens under negative-trust boundaries.
 //
 // Beats:
-//   1. Parse command-line options and dispatch --help, --version, or --mcp.
-//   2. Execute capability-bounded oocmp operations.
-//   3. Format and output structured results to standard output.
+//   1. Parse command-line options and dispatch help, version, and demo handlers.
+//   2. Run Model Context Protocol (MCP) streaming JSON-RPC server on --mcp.
+//   3. Ingest and compare input files byte-by-byte with skip and limit controls.
+//   4. Deliver standard POSIX cmp diagnostics, verbose octal listings, or JSON telemetry.
 
-fn render_help() -> String {
-    return "oocmp 0.1.0 (openOODA sovereign diff & comparison)\n"
-        + "usage: oocmp [options] [ARGUMENTS]...\n\n"
-        + "Instant byte-by-byte file comparison reporting first byte difference and line count.\n\n"
+import "core/cmp_types.oo";
+import "core/cmp_engine.oo";
+import "core/cmp_demo.oo";
+import "render/cmp_theme.oo";
+import "ipc/cmp_opts.oo";
+import "ipc/mcp_serve.oo";
+import "anchor.oo";
+
+pub fn render_help() -> String {
+    return "oocmp 0.2.0 (openOODA sovereign diff & comparison)\n"
+        + "usage: oocmp [OPTION]... FILE1 [FILE2 [SKIP1 [SKIP2]]]\n\n"
+        + "Compare two files byte by byte.\n\n"
         + "Options:\n"
-        + "  -h, --help           display this help and exit\n"
-        + "  -v, --version        output version information and exit\n"
-        + "      --json           output formatted as JSON Lines\n"
-        + "      --color <WHEN>   colorize output: auto, always, never [default: auto]\n"
-        + "      --theme <NAME>   override active oote palette\n"
-        + "      --mcp            run as Model Context Protocol stdio server\n";
+        + "  -b, --print-bytes          print differing bytes\n"
+        + "  -i, --ignore-initial=SKIP  skip first SKIP bytes of both inputs\n"
+        + "  -i, --ignore-initial=SKIP1:SKIP2  skip first SKIP1 bytes of FILE1 and SKIP2 bytes of FILE2\n"
+        + "  -l, --verbose              output byte numbers and differing byte values\n"
+        + "  -n, --bytes=LIMIT          compare at most LIMIT bytes\n"
+        + "  -s, --quiet, --silent      suppress all normal output\n"
+        + "      --demo                 run demonstration comparison scenarios\n"
+        + "      --json                 output formatted as JSON telemetry\n"
+        + "  -h, --help                 display this help and exit\n"
+        + "  -v, -V, --version          output version information and exit\n"
+        + "      --mcp                  run as Model Context Protocol stdio server\n";
 }
 
-fn render_version() -> String {
-    return "oocmp 0.1.0 (openOODA sovereign diff & comparison)\n";
+pub fn render_version() -> String {
+    return "oocmp 0.2.0 (openOODA sovereign diff & comparison)\n";
 }
 
-fn main(args: List[String]) -> Int {
-    let num_args: Int = list_len(args);
-    let mut i: Int = 0;
+fn handle_demo(opts: CmpCliOpts) -> Int {
+    let diff_res: CmpResult = build_demo_differ();
+    if opts.json {
+        print(render_cmp_json(diff_res));
+        return 0;
+    }
+    if opts.verbose_all {
+        let diffs: List[ByteDiff] = build_demo_diffs();
+        print(render_cmp_verbose(diffs, opts.print_bytes));
+        return 0;
+    }
+    print(render_cmp_posix(diff_res, opts.print_bytes));
+    return 0;
+}
 
-    while i < num_args {
-        let arg: String = list_get(args, i);
-        if arg == "-h" || arg == "--help" {
-            print(render_help());
-            return 0;
-        }
-        if arg == "-v" || arg == "--version" {
-            print(render_version());
-            return 0;
-        }
-        if arg == "--mcp" {
-            print("{\"jsonrpc\":\"2.0\",\"result\":{\"status\":\"ready\",\"tool\":\"oocmp\"}}\n");
-            return 0;
-        }
-        i = i + 1;
+pub fn main(
+    fs: &FsReadCap,
+    _proc_cap: &ProcessCap,
+    _env: &EnvCap,
+    args: List[String]
+) -> Result[Int, String] {
+    let opts: CmpCliOpts = parse_cli_args(args);
+
+    if opts.help {
+        print(render_help());
+        process_exit(0);
+        return Ok(0);
+    }
+    if opts.version {
+        print(render_version());
+        process_exit(0);
+        return Ok(0);
+    }
+    if opts.mcp {
+        run_mcp_server(fs);
+        process_exit(0);
+        return Ok(0);
+    }
+    if opts.demo {
+        let code: Int = handle_demo(opts);
+        process_exit(code);
+        return Ok(code);
     }
 
-    print("oocmp: sovereign capability-bounded utility ready\n");
-    return 0;
+    if chars_len(opts.file1) == 0 {
+        print("oocmp: missing operand\nTry 'oocmp --help' for more information.\n");
+        process_exit(2);
+        return Ok(2);
+    }
+    if chars_len(opts.file2) == 0 {
+        print("oocmp: missing operand after '" + opts.file1 + "'\nTry 'oocmp --help' for more information.\n");
+        process_exit(2);
+        return Ok(2);
+    }
+
+    let spec: CmpSpec = make_spec(opts.skip1, opts.skip2, opts.limit_bytes, opts.print_bytes, opts.verbose_all, opts.silent);
+    let cmp_res: Result[CmpResult, String] = compare_files(fs, opts.file1, opts.file2, spec);
+    if !cmp_res.is_ok() {
+        let err_msg: String = match cmp_res { Ok(_) => "", Err(e) => e };
+        print(err_msg + "\n");
+        process_exit(2);
+        return Ok(2);
+    }
+
+    let res: CmpResult = match cmp_res { Ok(r) => r, Err(_) => make_cmp_result("", "", false, 0, 0, 0, 0, 0, 0, "ERROR", "") };
+
+    if opts.json {
+        print(render_cmp_json(res));
+        let exit_code: Int = if res.identical { 0 } else { 1 };
+        process_exit(exit_code);
+        return Ok(exit_code);
+    }
+
+    if opts.silent {
+        let exit_code: Int = if res.identical { 0 } else { 1 };
+        process_exit(exit_code);
+        return Ok(exit_code);
+    }
+
+    if opts.verbose_all {
+        let r1: Result[String, String] = read_file(fs, opts.file1);
+        let r2: Result[String, String] = read_file(fs, opts.file2);
+        let b1: String = match r1 { Ok(s) => s, Err(_) => "" };
+        let b2: String = match r2 { Ok(s) => s, Err(_) => "" };
+        let diffs: List[ByteDiff] = collect_diffs(b1, b2, spec, 1000000);
+        print(render_cmp_verbose(diffs, opts.print_bytes));
+        let exit_code: Int = if res.identical { 0 } else { 1 };
+        process_exit(exit_code);
+        return Ok(exit_code);
+    }
+
+    let out: String = render_cmp_posix(res, opts.print_bytes);
+    if chars_len(out) > 0 {
+        print(out);
+    }
+
+    let exit_code: Int = if res.identical { 0 } else { 1 };
+    process_exit(exit_code);
+    return Ok(exit_code);
 }

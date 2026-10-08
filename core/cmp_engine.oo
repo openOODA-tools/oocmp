@@ -1,0 +1,189 @@
+// # oocmp Core Comparison Engine
+//
+// Logline: Stream reader and byte-by-byte differential comparator with octal translation.
+//
+// Setup: Demands FsReadCap to ingest filesystem payloads under sovereign capability boundaries.
+//
+// Beats:
+//   1. Convert numeric byte values into 3-digit octal strings.
+//   2. Compute character representation for printable and control bytes.
+//   3. Compare two buffers byte-by-byte tracking offsets and line counts.
+//   4. Collect structured differential records for verbose listing.
+
+import "core/cmp_types.oo";
+
+pub fn int_to_octal3(b: Int) -> String {
+    let d0: Int = (b / 64) % 8;
+    let d1: Int = (b / 8) % 8;
+    let d2: Int = b % 8;
+    return to_string(d0) + to_string(d1) + to_string(d2);
+}
+
+pub fn byte_to_char_repr(b: Int) -> String {
+    if b == 10 { return "^J"; }
+    if b == 13 { return "^M"; }
+    if b == 9 { return "^I"; }
+    if b == 0 { return "^@"; }
+    if b == 32 { return "SPACE"; }
+    if b >= 33 && b <= 126 {
+        return bytes_to_str(bytes_push(bytes_new(), b));
+    }
+    return "M-" + to_string(b);
+}
+
+pub fn compare_buffers(
+    f1_name: String,
+    buf1: String,
+    f2_name: String,
+    buf2: String,
+    spec: CmpSpec
+) -> CmpResult {
+    let len1: Int = chars_len(buf1);
+    let len2: Int = chars_len(buf2);
+
+    let start1: Int = if spec.skip1 < len1 { spec.skip1 } else { len1 };
+    let start2: Int = if spec.skip2 < len2 { spec.skip2 } else { len2 };
+
+    let mut i1: Int = start1;
+    let mut i2: Int = start2;
+    let mut byte_off: Int = 1;
+    let mut line_no: Int = 1;
+    let mut compared: Int = 0;
+    let mut diff_count: Int = 0;
+
+    let mut first_off: Int = -1;
+    let mut first_line: Int = -1;
+    let mut first_v1: Int = -1;
+    let mut first_v2: Int = -1;
+
+    let limit: Int = spec.limit_bytes;
+
+    while i1 < len1 && i2 < len2 {
+        if limit >= 0 && compared >= limit {
+            break;
+        }
+
+        let b1: Int = byte_at(buf1, i1);
+        let b2: Int = byte_at(buf2, i2);
+
+        if b1 != b2 {
+            if first_off < 0 {
+                first_off = byte_off;
+                first_line = line_no;
+                first_v1 = b1;
+                first_v2 = b2;
+            }
+            diff_count = diff_count + 1;
+            if !spec.verbose_all {
+                return make_cmp_result(
+                    f1_name, f2_name, false, compared + 1, diff_count,
+                    first_off, first_line, first_v1, first_v2, "DIFFER", ""
+                );
+            }
+        }
+
+        if b1 == 10 {
+            line_no = line_no + 1;
+        }
+
+        i1 = i1 + 1;
+        i2 = i2 + 1;
+        byte_off = byte_off + 1;
+        compared = compared + 1;
+    }
+
+    if first_off >= 0 {
+        return make_cmp_result(
+            f1_name, f2_name, false, compared, diff_count,
+            first_off, first_line, first_v1, first_v2, "DIFFER", ""
+        );
+    }
+
+    // Check EOF disparity if limit was not reached
+    if limit < 0 || compared < limit {
+        if i1 < len1 && i2 >= len2 {
+            return make_cmp_result(
+                f1_name, f2_name, false, compared, 1,
+                byte_off, line_no, byte_at(buf1, i1), -1, "EOF", f2_name
+            );
+        }
+        if i2 < len2 && i1 >= len1 {
+            return make_cmp_result(
+                f1_name, f2_name, false, compared, 1,
+                byte_off, line_no, -1, byte_at(buf2, i2), "EOF", f1_name
+            );
+        }
+    }
+
+    return make_cmp_result(
+        f1_name, f2_name, true, compared, 0,
+        -1, -1, -1, -1, "IDENTICAL", ""
+    );
+}
+
+pub fn collect_diffs(
+    buf1: String,
+    buf2: String,
+    spec: CmpSpec,
+    max_collect: Int
+) -> List[ByteDiff] {
+    let mut diffs: List[ByteDiff] = list_new();
+    let len1: Int = chars_len(buf1);
+    let len2: Int = chars_len(buf2);
+
+    let start1: Int = if spec.skip1 < len1 { spec.skip1 } else { len1 };
+    let start2: Int = if spec.skip2 < len2 { spec.skip2 } else { len2 };
+
+    let mut i1: Int = start1;
+    let mut i2: Int = start2;
+    let mut byte_off: Int = 1;
+    let mut line_no: Int = 1;
+    let mut collected: Int = 0;
+
+    while i1 < len1 && i2 < len2 && collected < max_collect {
+        let b1: Int = byte_at(buf1, i1);
+        let b2: Int = byte_at(buf2, i2);
+
+        if b1 != b2 {
+            let d: ByteDiff = make_byte_diff(
+                byte_off, line_no, b1, b2,
+                int_to_octal3(b1), int_to_octal3(b2),
+                byte_to_char_repr(b1), byte_to_char_repr(b2)
+            );
+            diffs = list_push(diffs, d);
+            collected = collected + 1;
+        }
+
+        if b1 == 10 {
+            line_no = line_no + 1;
+        }
+
+        i1 = i1 + 1;
+        i2 = i2 + 1;
+        byte_off = byte_off + 1;
+    }
+
+    return diffs;
+}
+
+pub fn compare_files(
+    fs: &FsReadCap,
+    f1_path: String,
+    f2_path: String,
+    spec: CmpSpec
+) -> Result[CmpResult, String] {
+    let r1: Result[String, String] = read_file(fs, f1_path);
+    if !r1.is_ok() {
+        return Err("oocmp: cannot read '" + f1_path + "'");
+    }
+    let r2: Result[String, String] = read_file(fs, f2_path);
+    if !r2.is_ok() {
+        return Err("oocmp: cannot read '" + f2_path + "'");
+    }
+
+    let b1: String = match r1 { Ok(s) => s, Err(_) => "" };
+    let b2: String = match r2 { Ok(s) => s, Err(_) => "" };
+
+    let res: CmpResult = compare_buffers(f1_path, b1, f2_path, b2, spec);
+    return Ok(res);
+}

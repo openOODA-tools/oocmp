@@ -1,0 +1,124 @@
+// # oocmp Byte Comparison Data Types
+//
+// Logline: Data structures for byte-level difference records, comparison results, and comparison specs.
+//
+// Setup: Encapsulates byte offsets, line positions, octal values, and comparison options.
+//
+// Beats:
+//   1. Declare ByteDiff record for individual byte divergence.
+//   2. Declare CmpResult record representing holistic stream comparison.
+//   3. Declare CmpSpec configuration record for comparison options.
+//   4. Supply constructors for typed comparison dispatch.
+
+pub type ByteDiff = struct {
+    byte_offset: Int,
+    line_number: Int,
+    val1: Int,
+    val2: Int,
+    oct1: String,
+    oct2: String,
+    char1: String,
+    char2: String
+};
+
+pub fn make_byte_diff(
+    byte_offset: Int,
+    line_number: Int,
+    val1: Int,
+    val2: Int,
+    oct1: String,
+    oct2: String,
+    char1: String,
+    char2: String
+) -> ByteDiff {
+    return ByteDiff {
+        byte_offset: byte_offset,
+        line_number: line_number,
+        val1: val1,
+        val2: val2,
+        oct1: oct1,
+        oct2: oct2,
+        char1: char1,
+        char2: char2
+    };
+}
+
+pub type CmpResult = struct {
+    file1: String,
+    file2: String,
+    identical: Bool,
+    total_compared: Int,
+    diff_count: Int,
+    first_diff_offset: Int,
+    first_diff_line: Int,
+    first_val1: Int,
+    first_val2: Int,
+    status: String,
+    eof_file: String
+};
+
+pub fn make_cmp_result(
+    file1: String,
+    file2: String,
+    identical: Bool,
+    total_compared: Int,
+    diff_count: Int,
+    first_diff_offset: Int,
+    first_diff_line: Int,
+    first_val1: Int,
+    first_val2: Int,
+    status: String,
+    eof_file: String
+) -> CmpResult {
+    return CmpResult {
+        file1: file1,
+        file2: file2,
+        identical: identical,
+        total_compared: total_compared,
+        diff_count: diff_count,
+        first_diff_offset: first_diff_offset,
+        first_diff_line: first_diff_line,
+        first_val1: first_val1,
+        first_val2: first_val2,
+        status: status,
+        eof_file: eof_file
+    };
+}
+
+pub type CmpSpec = struct {
+    skip1: Int,
+    skip2: Int,
+    limit_bytes: Int,
+    print_bytes: Bool,
+    verbose_all: Bool,
+    silent: Bool
+};
+
+pub fn make_default_spec() -> CmpSpec {
+    return CmpSpec {
+        skip1: 0,
+        skip2: 0,
+        limit_bytes: -1,
+        print_bytes: false,
+        verbose_all: false,
+        silent: false
+    };
+}
+
+pub fn make_spec(
+    skip1: Int,
+    skip2: Int,
+    limit_bytes: Int,
+    print_bytes: Bool,
+    verbose_all: Bool,
+    silent: Bool
+) -> CmpSpec {
+    return CmpSpec {
+        skip1: skip1,
+        skip2: skip2,
+        limit_bytes: limit_bytes,
+        print_bytes: print_bytes,
+        verbose_all: verbose_all,
+        silent: silent
+    };
+}
