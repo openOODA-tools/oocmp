@@ -107,9 +107,19 @@ jobs:
         run: |
           if ! command -v cmp >/dev/null 2>&1; then
             sudo apt-get update -qq
-            sudo apt-get install -y -qq cmp
+            sudo apt-get install -y -qq diffutils
           fi
-          command -v cmp >/dev/null 2>&1 || { echo "::error::the upstream tool cmp is required for the parity gate"; exit 1; }
+          if ! command -v cmp >/dev/null 2>&1; then
+            for cand in cmp ; do
+              for d in /usr/local/bin /usr/games /usr/bin /bin /usr/sbin /sbin; do
+                if [ -x "$d/$cand" ]; then
+                  sudo ln -sf "$d/$cand" /usr/local/bin/cmp
+                  break 2;
+                fi
+              done
+            done
+          fi
+          command -v cmp >/dev/null 2>&1 || { echo "::error::the upstream tool cmp is required for the parity gate and the package diffutils does not put it on this runner"; exit 1; }
 
       - name: Parity against the upstream tool
         working-directory: ${{ github.workspace }}/oocmp
