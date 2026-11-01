@@ -1,27 +1,14 @@
-# House-law verification gate (openOODA-tools CI template).
-#
-# AGENTS.md §7 requires the verification gate to pass before any commit or
-# release is certified. This workflow exists so that gate actually runs.
-#
-# Deliberately minimal: the ONLY substitution is the tool name. Everything
-# else — toolchain layout, oodar build, sandbox roots — is identical across
-# every tool, so there is nothing to hand-adapt and nothing to drift.
-#
-# `make verify` is the single entry point. The individual targets
-# (line-cap, academy, density, check) are NOT called directly: only some
-# tools define them, and the rest route through qa/verify_pages.py. Calling
-# the umbrella target works for every tool in the org.
 name: ci
 
 on:
   push:
-    branches: [master, main]
+    branches: [main]
   pull_request:
   workflow_dispatch:
 
 jobs:
-  verify:
-    name: House-law verification gate
+  gate:
+    name: Fleet gate
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -48,11 +35,37 @@ jobs:
           if ! command -v clang >/dev/null; then
             sudo apt-get update && sudo apt-get install -y clang
           fi
-          command -v clang >/dev/null || { echo "clang required for oodac build"; exit 1; }
+          command -v clang >/dev/null || { echo "clang is required to build the tool"; exit 1; }
 
-      - name: Build oodar runtime libraries
+      - name: Build the oodar runtime
         working-directory: ${{ github.workspace }}
         run: make -C oodar/scripts -f Makefile modular
+
+      - name: Require a build target
+        working-directory: ${{ github.workspace }}/oocmp
+        run: |
+          if ! grep -qE '^build[[:space:]]*:' Makefile; then
+            echo "::error::This repository has no build target. The tool is a stub and is tracked in the fleet backlog."
+            exit 1
+          fi
+
+      - name: Build the tool
+        working-directory: ${{ github.workspace }}/oocmp
+        env:
+          OODA_COMPILER: ${{ github.workspace }}/oodac/bin/oodac
+          OODA_FS_READDIR: ${{ github.workspace }}
+          OODA_FS_WRITEDIR: ${{ github.workspace }}
+          OODA_NO_JAIL: "1"
+        run: make build
+
+      - name: Require the tool binary
+        if: always()
+        working-directory: ${{ github.workspace }}/oocmp
+        run: |
+          if [ ! -x "dist/oocmp" ]; then
+            echo "::error::dist/oocmp was not produced. The tool is not implemented and is tracked in the fleet backlog."
+            exit 1
+          fi
 
       - name: Verify
         working-directory: ${{ github.workspace }}/oocmp
@@ -62,3 +75,48 @@ jobs:
           OODA_FS_WRITEDIR: ${{ github.workspace }}
           OODA_NO_JAIL: "1"
         run: make verify
+
+      - name: Test
+        working-directory: ${{ github.workspace }}/oocmp
+        env:
+          OODA_COMPILER: ${{ github.workspace }}/oodac/bin/oodac
+          OODA_FS_READDIR: ${{ github.workspace }}
+          OODA_FS_WRITEDIR: ${{ github.workspace }}
+          OODA_NO_JAIL: "1"
+        run: make test
+
+      - name: Pure test audit
+        working-directory: ${{ github.workspace }}/oocmp
+        run: |
+          if make -n pure >/dev/null 2>&1; then
+            make pure
+          else
+            echo "This repository has no pure target."
+          fi
+
+      - name: Double-run determinism
+        working-directory: ${{ github.workspace }}/oocmp
+        run: |
+          mkdir -p .ooda-cache
+          ./dist/oocmp --version > .ooda-cache/run1.txt 2>&1 || true
+          ./dist/oocmp --version > .ooda-cache/run2.txt 2>&1 || true
+          cmp -s .ooda-cache/run1.txt .ooda-cache/run2.txt || { echo "::error::the tool is not deterministic across two runs"; exit 1; }
+
+      - name: Install the upstream tool
+        working-directory: ${{ github.workspace }}
+        run: |
+          if ! command -v cmp >/dev/null 2>&1; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq cmp
+          fi
+          command -v cmp >/dev/null 2>&1 || { echo "::error::the upstream tool cmp is required for the parity gate"; exit 1; }
+
+      - name: Parity against the upstream tool
+        working-directory: ${{ github.workspace }}/oocmp
+        env:
+          OODA_COMPILER: ${{ github.workspace }}/oodac/bin/oodac
+          OODA_FS_READDIR: ${{ github.workspace }}
+          OODA_FS_WRITEDIR: ${{ github.workspace }}
+          OODA_NO_JAIL: "1"
+        run: make parity
+
