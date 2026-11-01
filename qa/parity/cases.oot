@@ -20,4 +20,7 @@
 
 match --demo
 match --demo --json
+match .test_a.txt .test_b.txt
+match -l -b .test_a.txt .test_b.txt
+match -i 5:5 -n 5 .test_a.txt .test_b.txt
 match .nonexistent_1.txt .nonexistent_2.txt
